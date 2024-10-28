@@ -24,6 +24,7 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Proto = Apache.Rocketmq.V2;
 using Org.Apache.Rocketmq.Error;
+using System.Linq;
 
 namespace Org.Apache.Rocketmq
 {
@@ -251,6 +252,52 @@ namespace Org.Apache.Rocketmq
                 Group = GetProtobufGroup(),
                 Topic = topicResource,
                 Entries = { entry }
+            };
+        }
+
+        public async Task Ack(IList<MessageView> messages)
+        {
+            if (State.Running != State)
+            {
+                throw new InvalidOperationException("Simple consumer is not running");
+            }
+
+            if (messages.Count == 0)
+            {
+                return;
+            }
+
+            var firstMessage = messages.First();
+            if (!messages.All(m => m.MessageQueue.Broker.Id == firstMessage.MessageQueue.Broker.Id))
+            {
+                throw new ArgumentException("All messages must be from the same broker");
+            }
+            if (!messages.All(m => m.Topic == firstMessage.Topic))
+            {
+                throw new ArgumentException("All messages must be from the same topic");
+            }
+
+            var request = WrapAckMessageRequest(messages);
+            var invocation = await ClientManager.AckMessage(firstMessage.MessageQueue.Broker.Endpoints, request,
+                ClientConfig.RequestTimeout);
+            StatusChecker.Check(invocation.Response.Status, request, invocation.RequestId);
+        }
+
+        private Proto.AckMessageRequest WrapAckMessageRequest(IList<MessageView> messages)
+        {
+            var topicResource = new Proto.Resource
+            {
+                Name = messages.First().Topic
+            };
+            return new Proto.AckMessageRequest
+            {
+                Group = GetProtobufGroup(),
+                Topic = topicResource,
+                Entries = { messages.Select(m => new Proto.AckMessageEntry
+                {
+                    MessageId = m.MessageId,
+                    ReceiptHandle = m.ReceiptHandle,
+                }) },
             };
         }
 
